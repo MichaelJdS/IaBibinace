@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.env
+.env*
+
+# VS Code
+.vscode/
+
+# Data and logs
+data/
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# SQLite
+*.sqlite3
+
+# pip
+pip-log.txt
+
+# PyInstaller
+dist/
+build/
+
+# Coverage
+htmlcov/
+.coverage
+
+# Byte-compiled / optimized
+*.pyc
+
+# JetBrains
+.idea/
+ 
+# Local config with secrets
+config.py
