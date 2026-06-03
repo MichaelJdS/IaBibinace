@@ -313,7 +313,7 @@ Responda SOMENTE JSON:
         conf = int(analysis.get("confidence", 0))
         action = analysis.get("action", "HOLD")
 
-        veto = abs(score) < 1.6
+        veto = abs(score) < 1.2
         if veto:
             action = "HOLD"
 

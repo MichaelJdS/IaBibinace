@@ -52,7 +52,9 @@ class NewsEngine:
         self._thread = None
         self._api_key = getattr(config, "FINNHUB_API_KEY", "")
         self._last_update: dict[str, float] = {}
-        self._cache_ttl = 90  # segundos
+        self._cache_ttl = 90
+        self._news_cache: list = []
+        self._news_cache_ts: float = 0
 
     def start(self):
         self._running = True
@@ -83,33 +85,25 @@ class NewsEngine:
         now = time.time()
         if now - self._last_update.get(symbol, 0) < self._cache_ttl:
             return
-
         if self._api_key:
             sentiment = self._fetch_finnhub_sentiment(symbol)
         else:
             sentiment = self._fetch_news_local(symbol)
-
         with self._lock:
             self._sentiments[symbol] = sentiment
             self._last_update[symbol] = now
-
         log.debug(f"Sentimento {symbol}: {sentiment:+.3f}")
 
     def _fetch_finnhub_sentiment(self, symbol: str) -> float:
-        """Retorna sentimento usando Finnhub quando aplicável.
-           Para crypto e forex usa direto o fallback léxico, pois
-           o endpoint /news-sentiment funciona apenas para ações."""
-        finnhub_sym = SYMBOL_MAP.get(symbol, symbol)
-
-        # Detecta tipo de mercado (busca por chave com e sem USDT)
-        market_type = config.MARKET_TYPE_MAP.get(symbol + "USDT",
-                      config.MARKET_TYPE_MAP.get(symbol, "crypto"))
-
-        # Para crypto e forex, vai direto ao léxico — news-sentiment só funciona para stocks
+        """Para crypto e forex vai direto ao léxico — news-sentiment só funciona para stocks."""
+        market_type = config.MARKET_TYPE_MAP.get(
+            symbol + "USDT",
+            config.MARKET_TYPE_MAP.get(symbol, "crypto")
+        )
         if market_type in ("crypto", "forex"):
             return self._fetch_general_news_sentiment(symbol)
 
-        # Tenta news-sentiment para ações
+        finnhub_sym = SYMBOL_MAP.get(symbol, symbol)
         url = f"https://finnhub.io/api/v1/news-sentiment?symbol={finnhub_sym}&token={self._api_key}"
         try:
             r = requests.get(url, timeout=5)
@@ -118,19 +112,14 @@ class NewsEngine:
                 score = data.get("companyNewsScore", 0)
                 buzz  = data.get("buzz", {}).get("buzz", 1.0)
                 if score != 0:
-                    normalized = (score - 0.5) * 2  # 0..1 → -1..+1
+                    normalized = (score - 0.5) * 2
                     return max(-1.0, min(1.0, normalized * min(buzz, 2.0)))
         except Exception:
             pass
-
         return self._fetch_general_news_sentiment(symbol)
 
     def _fetch_general_news_sentiment(self, symbol: str) -> float:
-        """Busca notícias gerais e calcula sentimento por léxico."""
-        url = (
-            f"https://finnhub.io/api/v1/news"
-            f"?category=general&token={self._api_key}"
-        )
+        url = f"https://finnhub.io/api/v1/news?category=general&token={self._api_key}"
         try:
             r = requests.get(url, timeout=5)
             if r.status_code != 200:
@@ -138,30 +127,24 @@ class NewsEngine:
             articles = r.json()
         except Exception:
             return 0.0
-
         query = symbol.upper()
         relevant = [
             a for a in articles
             if query in (a.get("headline", "") + a.get("summary", "")).upper()
         ][:10]
-
         if not relevant:
             return 0.0
-
         pos = neg = 0
         for a in relevant:
             text = (a.get("headline", "") + " " + a.get("summary", "")).lower()
             pos += sum(1 for w in POSITIVE_WORDS if w in text)
             neg += sum(1 for w in NEGATIVE_WORDS if w in text)
-
         total = pos + neg
         if total == 0:
             return 0.0
-
         return max(-1.0, min(1.0, (pos - neg) / total))
 
     def _fetch_news_local(self, symbol: str) -> float:
-        """Fallback quando não há chave Finnhub."""
         return 0.0
 
     def get_sentiment(self, symbol: str) -> float:
@@ -174,24 +157,28 @@ class NewsEngine:
         with self._lock:
             return self._headlines.get(clean, [])
 
-
     def get_news_feed(self, limit: int = 20) -> list:
-        """Retorna lista de notícias recentes para o painel."""
+        """Retorna lista de notícias recentes para o painel GUI."""
+        now = time.time()
+        if self._news_cache and (now - self._news_cache_ts) < 300:
+            return self._news_cache[:limit]
         if not self._api_key:
             return []
         url = f"https://finnhub.io/api/v1/news?category=general&token={self._api_key}"
         try:
             r = requests.get(url, timeout=5)
             if r.status_code == 200:
-                return r.json()[:limit]
-        except Exception:
-            pass
+                self._news_cache = r.json()
+                self._news_cache_ts = now
+                return self._news_cache[:limit]
+        except Exception as e:
+            log.warning(f"get_news_feed erro: {e}")
         return []
-
 
     def get_event_risk(self) -> str:
         """Retorna nível de risco de evento: low | medium | high."""
-        sentiments = list(self._sentiments.values())
+        with self._lock:
+            sentiments = list(self._sentiments.values())
         if not sentiments:
             return "low"
         avg = sum(sentiments) / len(sentiments)
