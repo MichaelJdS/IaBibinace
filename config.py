@@ -64,7 +64,7 @@ GROQ_ANALYSIS_INTERVAL = int(os.getenv("GROQ_ANALYSIS_INTERVAL",  "15"))
 MAX_OPEN_POSITIONS     = int(os.getenv("MAX_OPEN_POSITIONS",       "4"))
 MAX_POSITIONS          = int(os.getenv("MAX_POSITIONS",            "4"))   # alias legado
 MAX_POSITIONS_PER_MARKET = int(os.getenv("MAX_POSITIONS_PER_MARKET", "2"))
-ALLOW_SHORTS           = os.getenv("ALLOW_SHORTS", "True").lower() == "true"
+ALLOW_SHORTS           = os.getenv("ALLOW_SHORTS", "False").lower() == "true"
 
 # ── Risco ─────────────────────────────────────────────────────
 RISK_PER_TRADE_PCT     = float(os.getenv("RISK_PER_TRADE_PCT",    "0.008"))

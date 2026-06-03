@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
         pair   = config.PRIMARY_PAIR
         price  = self.brain.ws.get_price(pair)
         stats  = self.brain.risk.get_stats()
-        pos    = self.brain.executor.open_position
+        pos    = self.brain.crypto_executor.open_position
         groq   = self.brain.groq.get_state(symbol=pair)
 
         if price > 0:
@@ -612,7 +612,7 @@ class MainWindow(QMainWindow):
 
     def _update_charts(self):
         pair = config.PRIMARY_PAIR
-        df   = self.brain.ws.get_candles(pair, "15m")
+        df   = self.brain.ws.get_candles(pair, config.TF_PRIMARY)
         if df.empty or len(df) < 10:
             return
         df   = self.brain.indicators.compute_all(df.copy())
@@ -632,7 +632,7 @@ class MainWindow(QMainWindow):
 
         # Marca posição aberta
         self.chart_price.removeItem(getattr(self, "_pos_line", None))
-        pos = self.brain.executor.open_position
+        pos = self.brain.crypto_executor.open_position
         if pos:
             line = self.chart_price.addLine(
                 y=pos["entry_price"],
@@ -642,7 +642,7 @@ class MainWindow(QMainWindow):
 
     def _update_market(self):
         pair  = config.PRIMARY_PAIR
-        state = self.brain.ws.get_state(pair)
+        state = self.brain._binance_ws.get_state(pair)
         if not state:
             return
         ticks = state.get_ticks_df()
@@ -659,7 +659,7 @@ class MainWindow(QMainWindow):
             self.lbl_bid.setText(f"BID: ${state.bid:,.2f}")
             self.lbl_ask.setText(f"ASK: ${state.ask:,.2f}")
             self.lbl_spread.setText(f"SPREAD: ${state.spread:.2f}")
-        vwap = self.brain.ws.get_vwap(pair)
+        vwap = self.brain._binance_ws.get_vwap(pair)
         if vwap > 0:
             self.lbl_vwap.setText(f"VWAP: ${vwap:,.2f}")
 
@@ -793,7 +793,7 @@ class MainWindow(QMainWindow):
 
     def _update_risk(self):
         stats   = self.brain.risk.get_stats()
-        bals    = self.brain.executor.get_all_balances()
+        bals    = self.brain.crypto_executor.get_all_balances()
         max_loss = config.MAX_DAILY_LOSS_PCT * 100
         start   = self.brain.risk.daily_start_bal or 1
 
@@ -815,7 +815,7 @@ class MainWindow(QMainWindow):
         self.daily_loss_bar.setValue(int(min(100, loss_pct)))
 
     def _update_research(self):
-        history = self.brain.executor.get_trade_history()
+        history = self.brain.crypto_executor.get_trade_history()
         if not history:
             return
 

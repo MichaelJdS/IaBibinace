@@ -186,16 +186,16 @@ Responda SOMENTE JSON:
         threshold_adj = 0
         final_action = action
 
-        if abs(score) < 1.6:
+        if abs(score) < 1.2:
             veto = True
             reason = "score muito fraco"
-        elif confidence < 42 and action != "HOLD":
+        elif confidence < 38 and action != "HOLD":
             veto = True
             reason = "confiança insuficiente"
-        elif atr_pct > 0.03:
+        elif atr_pct > 0.05:
             veto = True
             reason = "volatilidade extrema"
-        elif regime == "ranging" and abs(score) < 2.8:
+        elif regime == "ranging" and abs(score) < 2.2:
             veto = True
             reason = "range sem edge"
 
@@ -291,8 +291,7 @@ Responda SOMENTE JSON:
             action = "HOLD"
             final_conf = min(final_conf, 45)
 
-        if abs(total_score) < 1.6:
-            action = "HOLD"
+        # note: basic low-score veto handled inside validator
 
         if action in ("BUY", "SELL") and final_conf < threshold:
             action = "HOLD"

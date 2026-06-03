@@ -96,11 +96,20 @@ class NewsEngine:
         log.debug(f"Sentimento {symbol}: {sentiment:+.3f}")
 
     def _fetch_finnhub_sentiment(self, symbol: str) -> float:
-        """Usa endpoint /news-sentiment do Finnhub (dados pro)
-           + /company-news para análise léxica quando sentiment=0."""
+        """Retorna sentimento usando Finnhub quando aplicável.
+           Para crypto e forex usa direto o fallback léxico, pois
+           o endpoint /news-sentiment funciona apenas para ações."""
         finnhub_sym = SYMBOL_MAP.get(symbol, symbol)
 
-        # Tenta news-sentiment (só funciona para ações, não crypto)
+        # Detecta tipo de mercado (busca por chave com e sem USDT)
+        market_type = config.MARKET_TYPE_MAP.get(symbol + "USDT",
+                      config.MARKET_TYPE_MAP.get(symbol, "crypto"))
+
+        # Para crypto e forex, vai direto ao léxico — news-sentiment só funciona para stocks
+        if market_type in ("crypto", "forex"):
+            return self._fetch_general_news_sentiment(symbol)
+
+        # Tenta news-sentiment para ações
         url = f"https://finnhub.io/api/v1/news-sentiment?symbol={finnhub_sym}&token={self._api_key}"
         try:
             r = requests.get(url, timeout=5)
@@ -114,7 +123,6 @@ class NewsEngine:
         except Exception:
             pass
 
-        # Fallback: /news para crypto e forex — análise léxica
         return self._fetch_general_news_sentiment(symbol)
 
     def _fetch_general_news_sentiment(self, symbol: str) -> float:
@@ -165,3 +173,30 @@ class NewsEngine:
         clean = symbol.upper().replace("USDT", "").replace("USD", "")
         with self._lock:
             return self._headlines.get(clean, [])
+
+
+    def get_news_feed(self, limit: int = 20) -> list:
+        """Retorna lista de notícias recentes para o painel."""
+        if not self._api_key:
+            return []
+        url = f"https://finnhub.io/api/v1/news?category=general&token={self._api_key}"
+        try:
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                return r.json()[:limit]
+        except Exception:
+            pass
+        return []
+
+
+    def get_event_risk(self) -> str:
+        """Retorna nível de risco de evento: low | medium | high."""
+        sentiments = list(self._sentiments.values())
+        if not sentiments:
+            return "low"
+        avg = sum(sentiments) / len(sentiments)
+        if avg < -0.4:
+            return "high"
+        elif avg < -0.1:
+            return "medium"
+        return "low"
