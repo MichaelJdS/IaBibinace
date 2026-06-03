@@ -38,6 +38,3 @@ htmlcov/
 
 # JetBrains
 .idea/
- 
-# Local config with secrets
-config.py
