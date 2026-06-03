@@ -596,7 +596,7 @@ class MainWindow(QMainWindow):
         price  = self.brain.ws.get_price(pair)
         stats  = self.brain.risk.get_stats()
         pos    = self.brain.executor.open_position
-        groq   = self.brain.groq.get_state()
+        groq   = self.brain.groq.get_state(symbol=pair)
 
         if price > 0:
             self.kpi_price.update_value(f"${price:,.2f}", CYAN)
@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
             self.lbl_vwap.setText(f"VWAP: ${vwap:,.2f}")
 
     def _update_ai(self):
-        gs = self.brain.groq.get_state()
+        gs = self.brain.groq.get_state(symbol=config.PRIMARY_PAIR)
         mapping = {
             "Regime"         : gs["regime"].replace("_", " ").upper(),
             "Bias"           : gs["bias"].upper(),
@@ -677,25 +677,92 @@ class MainWindow(QMainWindow):
             if k in self.ai_labels:
                 col = RED if (k == "Veto" and gs["veto"]) else CYAN
                 self.ai_labels[k].setText(v)
-                self.ai_labels[k].setStyleSheet(f"color: {col}; font-weight: bold; font-size: 13px;")
+                self.ai_labels[k].setStyleSheet(
+                    f"color: {col}; font-weight: bold; font-size: 13px;"
+                )
 
-        last_analysis = getattr(self.brain, '_last_analysis', {})
-        scores = last_analysis.get('scores', {})
+        # ── Scores das estratégias ────────────────────────────
+        last_analysis = getattr(self.brain, "_last_analysis", {})
+        scores = last_analysis.get("scores", {})
         score_map = {
-            "Trend Follow"   : scores.get("trend", 0),
-            "Mean Reversion" : scores.get("mean_reversion", 0),
-            "Breakout"       : scores.get("breakout", 0),
-            "News Shock"     : scores.get("momentum", 0),
+            "Trend Follow"  : scores.get("trend", 0),
+            "Mean Reversion": scores.get("mean_reversion", 0),
+            "Breakout"      : scores.get("breakout", 0),
+            "News Shock"    : scores.get("momentum", 0),
         }
         for name, val in score_map.items():
             if name in self.strat_bars:
                 self.strat_bars[name].setValue(int(val))
 
-        conf_pct = int(gs["confidence_multiplier"] / 1.5 * 100)
-        self.conf_bar.setValue(min(100, max(0, conf_pct)))
+        # ── FIX: barra de confiança usa confiança REAL do ensemble ──
+        real_conf = int(last_analysis.get("confidence", 0))
+        self.conf_bar.setValue(min(100, max(0, real_conf)))
 
-        if gs["explanation"] and gs["explanation"] != self.ai_explanation.toPlainText():
-            self.ai_explanation.setText(gs["explanation"])
+        # ── FIX: explicação com fallback visual enquanto Groq não responde ──
+        explanation  = gs.get("explanation", "").strip()
+        last_updated = gs.get("last_updated", "")
+
+        if explanation:
+            # Groq já respondeu: mostra explicação real
+            current = self.ai_explanation.toPlainText().strip()
+            if explanation != current:
+                self.ai_explanation.setPlainText(explanation)
+                cursor = self.ai_explanation.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                self.ai_explanation.setTextCursor(cursor)
+        else:
+            # Groq ainda não respondeu: mostra estado atual do ensemble
+            action = last_analysis.get("action", "HOLD")
+            score  = last_analysis.get("score", 0)
+            conf   = last_analysis.get("confidence", 0)
+            regime = gs.get("regime", "ranging")
+            msg = (
+                f"⏳ Aguardando primeira análise do Groq...\n\n"
+                f"Decisão atual do Ensemble:\n"
+                f"  Ação:       {action}\n"
+                f"  Score:      {score:+.2f}\n"
+                f"  Confiança:  {conf}%\n"
+                f"  Regime:     {regime}"
+            )
+            if self.ai_explanation.toPlainText().strip() != msg.strip():
+                self.ai_explanation.setPlainText(msg)
+
+        # ── FIX: popula o Log de Decisões AI ─────────────────
+        action = last_analysis.get("action", "")
+        score  = last_analysis.get("score", 0)
+        conf   = last_analysis.get("confidence", 0)
+        regime = gs.get("regime", "")
+        veto   = gs.get("veto", False)
+
+        if action:
+            hora     = time.strftime("%H:%M:%S")
+            pair     = config.PRIMARY_PAIR
+            veto_tag = " <b style='color:#ff1744'>[VETADO]</b>" if veto else ""
+            action_color = {"BUY": GREEN, "SELL": RED, "HOLD": YELLOW}.get(action, TEXT_PRI)
+
+            linha = (
+                f"<span style='color:{TEXT_MUT}'>{hora}</span> "
+                f"<b style='color:{action_color}'>{action}</b>{veto_tag} "
+                f"<span style='color:{TEXT_PRI}'>{pair}</span> | "
+                f"score=<span style='color:{CYAN}'>{score:+.2f}</span> "
+                f"conf=<span style='color:{YELLOW}'>{conf}%</span> "
+                f"regime=<span style='color:{PURPLE}'>{regime}</span>"
+            )
+
+            # Evita duplicar a mesma linha (checa hora truncada + ação)
+            last_line = self.ai_log.toPlainText().split("\n")[-1] \
+                        if self.ai_log.toPlainText() else ""
+            if hora[:5] not in last_line or action not in last_line:
+                self.ai_log.append(linha)
+                # Limita a 200 linhas
+                doc = self.ai_log.document()
+                while doc.blockCount() > 200:
+                    cursor = self.ai_log.textCursor()
+                    cursor.movePosition(cursor.MoveOperation.Start)
+                    cursor.select(cursor.SelectionType.BlockUnderCursor)
+                    cursor.removeSelectedText()
+                    cursor.deleteChar()
+                self.ai_log.moveCursor(self.ai_log.textCursor().MoveOperation.End)
 
     def _update_news(self):
         ne     = self.brain.news
