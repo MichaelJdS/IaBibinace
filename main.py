@@ -3,6 +3,9 @@
 CRYPTO IA BOT v2 — Entry point CLI (sem painel)
 Para rodar headless / em servidor
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import sys
 import os
 import time

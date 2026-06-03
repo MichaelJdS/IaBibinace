@@ -1,5 +1,6 @@
 """
-News Engine — Finnhub news + sentimento com cache
+NewsEngine v2 — usa Finnhub como fonte primária de notícias e sentimento.
+Fallback para análise local se Finnhub indisponível.
 """
 import time
 import threading
@@ -11,157 +12,156 @@ from utils.logger import get_logger
 
 log = get_logger("NewsEngine")
 
-CRYPTO_MAP = {
-    "BTC": "BINANCE:BTCUSDT",
-    "ETH": "BINANCE:ETHUSDT",
-    "BNB": "BINANCE:BNBUSDT",
+SYMBOL_MAP = {
+    "BTC":    "BINANCE:BTCUSDT",
+    "ETH":    "BINANCE:ETHUSDT",
+    "SOL":    "BINANCE:SOLUSDT",
+    "BNB":    "BINANCE:BNBUSDT",
+    "EURUSD": "OANDA:EUR_USD",
+    "GBPUSD": "OANDA:GBP_USD",
+    "USDJPY": "OANDA:USD_JPY",
+    "XAUUSD": "OANDA:XAU_USD",
+    "EUR":    "OANDA:EUR_USD",
+    "GBP":    "OANDA:GBP_USD",
+    "JPY":    "OANDA:USD_JPY",
+    "XAU":    "OANDA:XAU_USD",
+    "GOLD":   "OANDA:XAU_USD",
 }
+
+NEGATIVE_WORDS = {
+    "crash", "dump", "ban", "hack", "bear", "loss", "decline",
+    "fall", "fear", "sell", "drop", "collapse", "fraud", "risk",
+    "warning", "lawsuit", "investigation", "exploit", "attack",
+    "bankrupt", "insolvency", "regulatory", "fine", "penalty"
+}
+
+POSITIVE_WORDS = {
+    "bull", "rally", "surge", "buy", "gain", "pump", "adoption",
+    "partnership", "upgrade", "launch", "record", "high", "growth",
+    "profit", "approval", "etf", "institutional", "integration",
+    "breakout", "support", "accumulation", "invest", "expand"
+}
+
 
 class NewsEngine:
     def __init__(self):
-        self._lock       = threading.Lock()
-        self._news_cache = {}      # symbol → [news]
-        self._sentiment  = {       # symbol → float (-1..+1)
-            "BTC": 0.0, "ETH": 0.0, "BNB": 0.0, "GLOBAL": 0.0
-        }
-        self._event_risk = "low"
-        self._last_fetch = {}
-        self._fetch_interval = 180  # 3 min
-        self._running    = False
-        self._thread     = None
-        log.info("NewsEngine iniciado")
+        self._sentiments: dict[str, float] = {}
+        self._headlines: dict[str, list] = {}
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread = None
+        self._api_key = getattr(config, "FINNHUB_API_KEY", "")
+        self._last_update: dict[str, float] = {}
+        self._cache_ttl = 90  # segundos
 
     def start(self):
         self._running = True
-        self._thread  = threading.Thread(
+        self._thread = threading.Thread(
             target=self._loop, daemon=True, name="NewsEngine"
         )
         self._thread.start()
+        log.info("NewsEngine iniciado")
 
     def stop(self):
         self._running = False
 
     def _loop(self):
+        symbols = list(set(
+            s.replace("USDT", "").replace("USD", "")
+            for s in getattr(config, "TRADING_PAIRS", ["BTCUSDT"])
+        ))
         while self._running:
-            for sym in ["BTC", "ETH", "BNB"]:
-                self._fetch_news(sym)
-            self._fetch_global_news()
-            time.sleep(self._fetch_interval)
+            for sym in symbols:
+                try:
+                    self._update_sentiment(sym)
+                except Exception as e:
+                    log.warning(f"NewsEngine erro {sym}: {e}")
+                time.sleep(1.5)
+            time.sleep(getattr(config, "NEWS_POLL_SEC", 120))
 
-    def _fetch_news(self, symbol: str):
-        now  = int(time.time())
-        last = self._last_fetch.get(symbol, 0)
-        if now - last < self._fetch_interval:
+    def _update_sentiment(self, symbol: str):
+        now = time.time()
+        if now - self._last_update.get(symbol, 0) < self._cache_ttl:
             return
 
+        if self._api_key:
+            sentiment = self._fetch_finnhub_sentiment(symbol)
+        else:
+            sentiment = self._fetch_news_local(symbol)
+
+        with self._lock:
+            self._sentiments[symbol] = sentiment
+            self._last_update[symbol] = now
+
+        log.debug(f"Sentimento {symbol}: {sentiment:+.3f}")
+
+    def _fetch_finnhub_sentiment(self, symbol: str) -> float:
+        """Usa endpoint /news-sentiment do Finnhub (dados pro)
+           + /company-news para análise léxica quando sentiment=0."""
+        finnhub_sym = SYMBOL_MAP.get(symbol, symbol)
+
+        # Tenta news-sentiment (só funciona para ações, não crypto)
+        url = f"https://finnhub.io/api/v1/news-sentiment?symbol={finnhub_sym}&token={self._api_key}"
         try:
-            url    = "https://finnhub.io/api/v1/news"
-            params = {
-                "category": "crypto",
-                "token"   : config.FINNHUB_API_KEY
-            }
-            r = requests.get(url, params=params, timeout=10)
-            r.raise_for_status()
-            news = r.json()
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                score = data.get("companyNewsScore", 0)
+                buzz  = data.get("buzz", {}).get("buzz", 1.0)
+                if score != 0:
+                    normalized = (score - 0.5) * 2  # 0..1 → -1..+1
+                    return max(-1.0, min(1.0, normalized * min(buzz, 2.0)))
+        except Exception:
+            pass
 
-            # Filtra por símbolo
-            kw   = symbol.lower()
-            filtered = [
-                n for n in news
-                if kw in n.get("headline", "").lower()
-                or kw in n.get("summary",  "").lower()
-            ][:30]
+        # Fallback: /news para crypto e forex — análise léxica
+        return self._fetch_general_news_sentiment(symbol)
 
-            with self._lock:
-                self._news_cache[symbol] = filtered
-                self._sentiment[symbol]  = self._calc_sentiment(filtered)
-                self._last_fetch[symbol] = now
-
-            log.debug(f"News {symbol}: {len(filtered)} artigos | sent={self._sentiment[symbol]:.2f}")
-        except Exception as e:
-            log.warning(f"Erro ao buscar news {symbol}: {e}")
-
-    def _fetch_global_news(self):
+    def _fetch_general_news_sentiment(self, symbol: str) -> float:
+        """Busca notícias gerais e calcula sentimento por léxico."""
+        url = (
+            f"https://finnhub.io/api/v1/news"
+            f"?category=general&token={self._api_key}"
+        )
         try:
-            url    = "https://finnhub.io/api/v1/news"
-            params = {"category": "general", "token": config.FINNHUB_API_KEY}
-            r      = requests.get(url, params=params, timeout=10)
-            r.raise_for_status()
-            news   = r.json()[:20]
-
-            global_sent = self._calc_sentiment(news)
-            risk        = self._assess_event_risk(news)
-
-            with self._lock:
-                self._news_cache["GLOBAL"] = news
-                self._sentiment["GLOBAL"]  = global_sent
-                self._event_risk           = risk
-
-        except Exception as e:
-            log.debug(f"Erro global news: {e}")
-
-    def _calc_sentiment(self, news: list) -> float:
-        if not news:
+            r = requests.get(url, timeout=5)
+            if r.status_code != 200:
+                return 0.0
+            articles = r.json()
+        except Exception:
             return 0.0
 
-        positive = ["bullish","rally","surge","jump","gains","recovery",
-                    "breakout","all-time","ath","adopt","partnership",
-                    "buy","upgrade","record","approve","approved","etf"]
-        negative = ["bearish","crash","drop","decline","sell","plunge",
-                    "hack","ban","fraud","risk","warning","fear","fud",
-                    "regulation","sec","lawsuit","exploit","lose"]
+        query = symbol.upper()
+        relevant = [
+            a for a in articles
+            if query in (a.get("headline", "") + a.get("summary", "")).upper()
+        ][:10]
 
-        scores = []
-        for n in news:
-            text  = (n.get("headline","") + " " + n.get("summary","")).lower()
-            pos   = sum(1 for w in positive if w in text)
-            neg   = sum(1 for w in negative if w in text)
-            total = pos + neg
-            if total > 0:
-                scores.append((pos - neg) / total)
+        if not relevant:
+            return 0.0
 
-        return round(sum(scores) / len(scores), 3) if scores else 0.0
+        pos = neg = 0
+        for a in relevant:
+            text = (a.get("headline", "") + " " + a.get("summary", "")).lower()
+            pos += sum(1 for w in POSITIVE_WORDS if w in text)
+            neg += sum(1 for w in NEGATIVE_WORDS if w in text)
 
-    def _assess_event_risk(self, news: list) -> str:
-        high_risk_kw = [
-            "fed","federal reserve","interest rate","cpi","inflation",
-            "war","crisis","ban","emergency","hack","exploit",
-            "sanctions","recession"
-        ]
-        count = 0
-        for n in news:
-            text = (n.get("headline","") + n.get("summary","")).lower()
-            count += sum(1 for kw in high_risk_kw if kw in text)
+        total = pos + neg
+        if total == 0:
+            return 0.0
 
-        if count >= 5:
-            return "high"
-        elif count >= 2:
-            return "medium"
-        return "low"
+        return max(-1.0, min(1.0, (pos - neg) / total))
 
-    # ── Getters ───────────────────────────────────────────────
+    def _fetch_news_local(self, symbol: str) -> float:
+        """Fallback quando não há chave Finnhub."""
+        return 0.0
 
     def get_sentiment(self, symbol: str) -> float:
+        clean = symbol.upper().replace("USDT", "").replace("USD", "")
         with self._lock:
-            return self._sentiment.get(symbol, 0.0)
+            return self._sentiments.get(clean, self._sentiments.get(symbol, 0.0))
 
-    def get_event_risk(self) -> str:
+    def get_headlines(self, symbol: str) -> list:
+        clean = symbol.upper().replace("USDT", "").replace("USD", "")
         with self._lock:
-            return self._event_risk
-
-    def get_news_feed(self, limit: int = 20) -> list:
-        with self._lock:
-            all_news = []
-            for news in self._news_cache.values():
-                all_news.extend(news)
-        all_news.sort(key=lambda x: x.get("datetime", 0), reverse=True)
-        return all_news[:limit]
-
-    def get_combined_sentiment(self) -> float:
-        """Média ponderada de todos os sentimentos."""
-        with self._lock:
-            btc = self._sentiment["BTC"]   * 0.5
-            eth = self._sentiment["ETH"]   * 0.25
-            bnb = self._sentiment["BNB"]   * 0.1
-            gl  = self._sentiment["GLOBAL"]* 0.15
-        return round(btc + eth + bnb + gl, 3)
+            return self._headlines.get(clean, [])

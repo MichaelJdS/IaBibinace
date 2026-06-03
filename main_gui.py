@@ -2,6 +2,9 @@
 """
 CRYPTO IA BOT v2 — Entry point com Painel PyQt6
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import sys
 
