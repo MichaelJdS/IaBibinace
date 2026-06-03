@@ -1,11 +1,10 @@
 """
-Brain Agent v3 — Multi-mercado: Crypto + Forex
-- Usa MarketDataHub em vez de BinanceWS diretamente
-- Roteamento automático de executor por tipo de mercado
-- Alta frequência: CYCLE_SLEEP = 1s
+Brain Agent v4 — Apenas Crypto na Binance Demo/Real
+- ForexExecutor removido — Binance não suporta forex
+- Todos os pares são crypto (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT)
+- Todas as ordens vão para a Binance Demo (demo-api.binance.com)
 """
 import time
-import threading
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,7 +20,6 @@ from core.binance_ws      import BinanceWebSocketManager
 from core.market_data_hub import MarketDataHub
 from core.indicators      import TechnicalIndicators
 from core.order_executor  import OrderExecutor
-from core.forex_executor  import ForexExecutor
 from core.news_engine     import NewsEngine
 from core.database        import DatabaseEngine
 from core.adaptive_engine import AdaptiveEngine
@@ -34,19 +32,18 @@ log = get_logger("Brain")
 
 class BrainAgent:
     def __init__(self):
-        log.info("=== CRYPTO IA BOT v3 — Multi-mercado iniciando ===")
+        log.info("=== CRYPTO IA BOT v4 — Apenas Crypto (Binance Demo) ===")
 
-        self.db         = DatabaseEngine()
+        self.db          = DatabaseEngine()
         self._binance_ws = BinanceWebSocketManager()
-        self.ws         = MarketDataHub(self._binance_ws)
-        self.indicators = TechnicalIndicators()
-        self.news       = NewsEngine()
-        self.groq       = GroqCouncil()
-        self.adaptive   = AdaptiveEngine(self.db, self.groq)
-        self.risk       = RiskEngine(self.db, self.adaptive)
+        self.ws          = MarketDataHub(self._binance_ws)
+        self.indicators  = TechnicalIndicators()
+        self.news        = NewsEngine()
+        self.groq        = GroqCouncil()
+        self.adaptive    = AdaptiveEngine(self.db, self.groq)
+        self.risk        = RiskEngine(self.db, self.adaptive)
 
         self.crypto_executor = OrderExecutor()
-        self.forex_executor  = ForexExecutor()
 
         # Liga RiskEngine ao executor para controle em runtime de SL/TP/MaxOrder
         self.risk.set_executor(self.crypto_executor)
@@ -59,12 +56,7 @@ class BrainAgent:
         self._last_analysis       = {}
         self._last_regime_by_pair = {}
         self._last_summary_hour   = -1
-        self._pair_contexts       = {}  # cache de contexto MTF por par
-
-    def _get_executor(self, symbol: str):
-        if config.MARKET_TYPE_MAP.get(symbol) == "forex":
-            return self.forex_executor
-        return self.crypto_executor
+        self._pair_contexts       = {}
 
     def start(self):
         self._running    = True
@@ -76,10 +68,10 @@ class BrainAgent:
         tg_start()
 
         self.crypto_executor.set_ws(self._binance_ws)
-        self.forex_executor.set_hub(self.ws)
 
         bal = self.crypto_executor.get_balance("USDT")
         self.risk.set_daily_start_balance(bal)
+        log.info(f"Saldo Binance {config.TRADING_MODE}: ${bal:,.2f} USDT")
 
         log.info("Aguardando dados iniciais...")
         time.sleep(5)
@@ -105,8 +97,18 @@ class BrainAgent:
 
         log.info("Brain parado.")
 
+    def _check_daily_summary(self):
+        hour = int(time.strftime("%H"))
+        if hour == 23 and self._last_summary_hour != 23:
+            stats = self.risk.get_stats()
+            bal   = self.crypto_executor.get_balance("USDT")
+            notify_daily_summary(stats, bal)
+            self._last_summary_hour = 23
+        elif hour != 23:
+            self._last_summary_hour = hour
+
     def _main_loop(self):
-        log.info("Loop principal v3 iniciado")
+        log.info("Loop principal v4 iniciado — operando só cripto na Binance")
         while self._running:
             try:
                 self._cycle += 1
@@ -118,18 +120,8 @@ class BrainAgent:
                     notify_error("Brain", str(e)[:200])
             time.sleep(getattr(config, "CYCLE_SLEEP", 1.0))
 
-    def _check_daily_summary(self):
-        hour = int(time.strftime("%H"))
-        if hour == 23 and self._last_summary_hour != 23:
-            stats = self.risk.get_stats()
-            bal   = self.crypto_executor.get_balance("USDT")
-            notify_daily_summary(stats, bal)
-            self._last_summary_hour = 23
-        elif hour != 23:
-            self._last_summary_hour = hour
-
     def _run_cycle(self):
-        for pair in config.TRADING_PAIRS:
+        for pair in config.TRADING_PAIRS:   # só pares crypto agora
             if not self.ws.is_ready(pair):
                 continue
             try:
@@ -138,13 +130,11 @@ class BrainAgent:
                 log.error(f"Erro par {pair}: {e}", exc_info=True)
 
     def _build_context(self, pair: str) -> dict:
-        """Constrói contexto MTF para melhorar score do ensemble."""
         context = {}
         df_primary = self.ws.get_candles(pair, config.TF_PRIMARY)
         if not df_primary.empty and len(df_primary) >= 50:
             df_ind = self.indicators.compute_all(df_primary.copy())
-            trend = str(df_ind.iloc[-1].get("trend", ""))
-            context["primary_trend"] = trend
+            context["primary_trend"] = str(df_ind.iloc[-1].get("trend", ""))
 
         df_confirm = self.ws.get_candles(pair, config.TF_CONFIRM)
         if not df_confirm.empty and len(df_confirm) >= 50:
@@ -169,19 +159,19 @@ class BrainAgent:
 
         if self._cycle % 10 == 0:
             self.db.save_snapshot({
-                "symbol":    pair,
-                "price":     price,
-                "rsi":       last.get("rsi"),
-                "macd":      last.get("macd"),
-                "bb_width":  last.get("bb_width"),
-                "trend":     last.get("trend"),
-                "volume":    last.get("volume"),
-                "sentiment": self.news.get_sentiment(pair.replace("USDT", "").replace("USD", ""))
+                "symbol"   : pair,
+                "price"    : price,
+                "rsi"      : last.get("rsi"),
+                "macd"     : last.get("macd"),
+                "bb_width" : last.get("bb_width"),
+                "trend"    : last.get("trend"),
+                "volume"   : last.get("volume"),
+                "sentiment": self.news.get_sentiment(pair.replace("USDT", ""))
             })
 
-        executor = self._get_executor(pair)
-        pos = executor.get_open_position(pair)
+        pos = self.crypto_executor.get_open_position(pair)
 
+        # ── Gestão de posição aberta ──────────────────────────
         if pos:
             sl_hit = price <= pos["stop_loss"]
             tp_hit = price >= pos["take_profit"]
@@ -189,15 +179,16 @@ class BrainAgent:
 
             if sl_hit or tp_hit or tr_hit:
                 reason = "sl" if sl_hit else ("tp" if tp_hit else "trailing")
-                result = executor.sell(symbol=pair, reason=reason)
-                ok, pnl_pct, pnl_usd, is_win = result
+                ok, pnl_pct, pnl_usd, is_win = self.crypto_executor.sell(
+                    symbol=pair, reason=reason
+                )
                 if ok:
                     entry    = pos["entry_price"]
                     duration = int(time.time() - pos.get("entry_time", time.time()))
                     self.risk.record_trade(
                         pnl_usd=pnl_usd, pnl_pct=pnl_pct, is_win=is_win,
                         reason=reason,
-                        trade_id=getattr(executor, "_last_trade_id", None),
+                        trade_id=getattr(self.crypto_executor, "_last_trade_id", None),
                         exit_price=price, duration_sec=duration
                     )
                     notify_sell(
@@ -206,67 +197,77 @@ class BrainAgent:
                         pnl_pct=pnl_pct * 100, reason=reason,
                         duration_sec=duration
                     )
+                    log.info(
+                        f"{'✅' if is_win else '❌'} {pair} SELL [{reason}] "
+                        f"@ ${price:,.4f} | PnL: ${pnl_usd:+.4f}"
+                    )
             return
 
-        open_count  = len(executor.get_open_positions())
+        # ── Verificação de risco para nova entrada ────────────
+        open_count  = len(self.crypto_executor.get_open_positions())
         can, reason = self.risk.can_trade(open_count)
         if not can:
             if "Cooldown" in reason and self._cycle % 40 == 0:
                 notify_cooldown(reason, 0)
             return
 
-        # MTF context (atualiza a cada 5 ciclos por par)
+        # ── Contexto MTF (atualiza a cada 5 ciclos por par) ──
         if self._cycle % 5 == 0:
             self._pair_contexts[pair] = self._build_context(pair)
         context = self._pair_contexts.get(pair, {})
 
-        sentiment = self.news.get_sentiment(pair.replace("USDT", "").replace("USD", ""))
+        sentiment = self.news.get_sentiment(pair.replace("USDT", ""))
         analysis  = self.ensemble.analyze(df_ind, sentiment, context=context)
         self._last_analysis = analysis
 
         atr      = float(last.get("atr", 0) or 0)
         decision = self.groq.decide(analysis, price, atr, sentiment, symbol=pair)
 
+        # ── Notifica mudança de regime ────────────────────────
         new_regime = decision.get("regime", "ranging")
         if new_regime != self._last_regime_by_pair.get(pair):
             notify_regime_change(
                 old_regime=self._last_regime_by_pair.get(pair, "ranging"),
                 new_regime=new_regime,
-                price=price,
-                symbol=pair
+                price=price, symbol=pair
             )
             self._last_regime_by_pair[pair] = new_regime
 
         self.db.save_ai_decision({
             **decision,
-            "symbol":     pair,
+            "symbol"    : pair,
             "indicators": analysis.get("indicators", {})
         })
 
+        # ── Execução de BUY ───────────────────────────────────
         if decision["action"] == "BUY":
-            bal    = executor.get_balance("USDT")
+            bal    = self.crypto_executor.get_balance("USDT")
             qty    = self.risk.compute_position_size(bal, price, atr)
             sl, tp = self.risk.compute_sl_tp(price, atr)
 
-            ok = executor.buy(
+            if qty <= 0:
+                log.warning(f"Quantidade calculada inválida para {pair}: {qty}")
+                return
+
+            ok = self.crypto_executor.buy(
                 symbol=pair, quantity=qty, price=price,
                 stop_loss=sl, take_profit=tp
             )
             if ok:
                 trade_id = self.db.save_trade_open({
-                    "symbol":       pair,
-                    "side":         "BUY",
-                    "entry_price":  price,
-                    "quantity":     qty,
-                    "stop_loss":    sl,
-                    "take_profit":  tp,
+                    "symbol"      : pair,
+                    "side"        : "BUY",
+                    "entry_price" : price,
+                    "quantity"    : qty,
+                    "stop_loss"   : sl,
+                    "take_profit" : tp,
                     "reason_entry": decision.get("explanation", "")[:200],
-                    "confidence":   decision.get("confidence"),
-                    "regime":       decision.get("regime"),
-                    "indicators":   analysis.get("indicators", {}),
-                    "mode":         config.TRADING_MODE
+                    "confidence"  : decision.get("confidence"),
+                    "regime"      : decision.get("regime"),
+                    "indicators"  : analysis.get("indicators", {}),
+                    "mode"        : config.TRADING_MODE
                 })
-                executor._last_trade_id = trade_id
+                self.crypto_executor._last_trade_id = trade_id
                 notify_buy(
                     symbol=pair, price=price, qty=qty,
                     sl=sl, tp=tp,
@@ -275,37 +276,32 @@ class BrainAgent:
                     explanation=decision.get("explanation", "")
                 )
                 log.info(
-                    f"🟢 {pair} BUY @ {price:.4f} | "
-                    f"conf={decision['confidence']}% | regime={decision.get('regime','?')} | "
-                    f"SL={sl:.4f} TP={tp:.4f}"
+                    f"🟢 {pair} BUY @ ${price:,.4f} | "
+                    f"qty={qty:.6f} | "
+                    f"conf={decision['confidence']}% | "
+                    f"regime={decision.get('regime','?')} | "
+                    f"SL=${sl:,.4f} TP=${tp:,.4f}"
                 )
 
-        # SELL: executa como BUY reverso (sem short nativo na Binance spot)
-        # Vende o ativo base se tiver saldo
+        # ── Execução de SELL (fechar posição longa se houver) ─
         elif decision["action"] == "SELL":
-            base = pair.replace("USDT", "")
-            base_bal = executor.get_balance(base)
-            min_notional = getattr(config, "MIN_NOTIONAL", 25)
-            if base_bal * price >= min_notional:
-                qty = round(base_bal * 0.95, 6)  # vende 95% do saldo
-                sl, tp = self.risk.compute_sl_tp(price, atr, side="SELL")
-                ok = executor.buy(
-                    symbol=pair, quantity=qty, price=price,
-                    stop_loss=sl, take_profit=tp
+            pos = self.crypto_executor.get_open_position(pair)
+            if pos:
+                ok, pnl_pct, pnl_usd, is_win = self.crypto_executor.sell(
+                    symbol=pair, reason="signal_sell"
                 )
-                # Em spot, SELL = fechar posição longa, não abre short
-                # Usar sell() diretamente se houver posição
-            if executor.get_open_position(pair):
-                result = executor.sell(symbol=pair, reason="signal_sell")
-                ok, pnl_pct, pnl_usd, is_win = result
                 if ok:
                     self.risk.record_trade(
                         pnl_usd=pnl_usd, pnl_pct=pnl_pct, is_win=is_win,
                         reason="signal_sell"
                     )
                     notify_sell(
-                        symbol=pair, entry=executor.open_position["entry_price"] if executor.open_position else price,
-                        exit_p=price, qty=0, pnl_usd=pnl_usd,
-                        pnl_pct=pnl_pct * 100, reason="signal_sell", duration_sec=0
+                        symbol=pair, entry=pos["entry_price"],
+                        exit_p=price, qty=pos["quantity"],
+                        pnl_usd=pnl_usd, pnl_pct=pnl_pct * 100,
+                        reason="signal_sell", duration_sec=0
                     )
-                    log.info(f"🔴 {pair} SELL executado @ {price:.4f} | PnL: ${pnl_usd:+.2f}")
+                    log.info(
+                        f"🔴 {pair} SELL (sinal) @ ${price:,.4f} | "
+                        f"PnL: ${pnl_usd:+.4f}"
+                    )

@@ -13,9 +13,10 @@ DEBUG = os.getenv("DEBUG", "1") == "1"
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE  = os.getenv("LOG_FILE", "logs/bot.log")
 
-# ── Mercado / símbolos ────────────────────────────────────────
+# ── Mercado / símbolos ────────────────────────────────────────────
 PRIMARY_PAIR = os.getenv("PRIMARY_PAIR", "BTCUSDT")
 
+# Operação apenas em cripto (Binance Demo)
 CRYPTO_PAIRS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -23,24 +24,15 @@ CRYPTO_PAIRS = [
     "BNBUSDT",
 ]
 
-FOREX_PAIRS = [
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "XAUUSD",
-]
+FOREX_PAIRS  = []   # forex removido — Binance não suporta
 
-TRADING_PAIRS = CRYPTO_PAIRS + FOREX_PAIRS
+TRADING_PAIRS = CRYPTO_PAIRS
 
 MARKET_TYPE_MAP = {
     "BTCUSDT": "crypto",
     "ETHUSDT": "crypto",
     "SOLUSDT": "crypto",
     "BNBUSDT": "crypto",
-    "EURUSD":  "forex",
-    "GBPUSD":  "forex",
-    "USDJPY":  "forex",
-    "XAUUSD":  "forex",
 }
 
 # ── Timeframes ────────────────────────────────────────────────

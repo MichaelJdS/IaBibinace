@@ -103,18 +103,20 @@ class MarketDataHub:
 
     def start(self):
         self.binance_ws.start()
-        if YFINANCE_AVAILABLE:
+        # Só inicia ForexFeed se houver pares forex configurados
+        if config.FOREX_PAIRS and YFINANCE_AVAILABLE:
             for pair in config.FOREX_PAIRS:
                 try:
                     self.forex_feed._update(pair)
                 except Exception as e:
                     log.warning(f"ForexFeed init {pair}: {e}")
-        self.forex_feed.start()
+            self.forex_feed.start()
         log.info("MarketDataHub iniciado")
 
     def stop(self):
         self.binance_ws.stop()
-        self.forex_feed.stop()
+        if config.FOREX_PAIRS:
+            self.forex_feed.stop()
 
     def get_price(self, symbol: str) -> float:
         if config.MARKET_TYPE_MAP.get(symbol) == "forex":
