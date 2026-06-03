@@ -207,7 +207,7 @@ Responda SOMENTE JSON:
             if bias == "bearish" and action == "SELL":
                 conf_mult += 0.08
             if regime == "ranging":
-                threshold_adj += 6
+                threshold_adj -= 4
             elif regime in ("trending_up", "trending_down"):
                 threshold_adj -= 4
 
@@ -285,7 +285,7 @@ Responda SOMENTE JSON:
         final_conf = int(max(0, min(100, raw_conf * cs.confidence_multiplier)))
 
         threshold = int(getattr(config, "CONFIDENCE_THRESHOLD", 52) + cs.threshold_adjustment)
-        threshold = max(35, min(85, threshold))
+        threshold = max(30, min(75, threshold))
 
         if cs.veto and action in ("BUY", "SELL"):
             action = "HOLD"

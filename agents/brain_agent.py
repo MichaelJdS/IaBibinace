@@ -48,6 +48,9 @@ class BrainAgent:
         self.crypto_executor = OrderExecutor()
         self.forex_executor  = ForexExecutor()
 
+        # Liga RiskEngine ao executor para controle em runtime de SL/TP/MaxOrder
+        self.risk.set_executor(self.crypto_executor)
+
         self.ensemble = EnsembleStrategy(self.adaptive)
 
         self._running             = False
@@ -277,8 +280,32 @@ class BrainAgent:
                     f"SL={sl:.4f} TP={tp:.4f}"
                 )
 
-        elif decision["action"] == "SELL" and config.ALLOW_SHORTS:
-            log.info(
-                f"🔴 {pair} SELL @ {price:.4f} | "
-                f"conf={decision['confidence']}% | regime={decision.get('regime','?')}"
-            )
+        # SELL: executa como BUY reverso (sem short nativo na Binance spot)
+        # Vende o ativo base se tiver saldo
+        elif decision["action"] == "SELL":
+            base = pair.replace("USDT", "")
+            base_bal = executor.get_balance(base)
+            min_notional = getattr(config, "MIN_NOTIONAL", 25)
+            if base_bal * price >= min_notional:
+                qty = round(base_bal * 0.95, 6)  # vende 95% do saldo
+                sl, tp = self.risk.compute_sl_tp(price, atr, side="SELL")
+                ok = executor.buy(
+                    symbol=pair, quantity=qty, price=price,
+                    stop_loss=sl, take_profit=tp
+                )
+                # Em spot, SELL = fechar posição longa, não abre short
+                # Usar sell() diretamente se houver posição
+            if executor.get_open_position(pair):
+                result = executor.sell(symbol=pair, reason="signal_sell")
+                ok, pnl_pct, pnl_usd, is_win = result
+                if ok:
+                    self.risk.record_trade(
+                        pnl_usd=pnl_usd, pnl_pct=pnl_pct, is_win=is_win,
+                        reason="signal_sell"
+                    )
+                    notify_sell(
+                        symbol=pair, entry=executor.open_position["entry_price"] if executor.open_position else price,
+                        exit_p=price, qty=0, pnl_usd=pnl_usd,
+                        pnl_pct=pnl_pct * 100, reason="signal_sell", duration_sec=0
+                    )
+                    log.info(f"🔴 {pair} SELL executado @ {price:.4f} | PnL: ${pnl_usd:+.2f}")

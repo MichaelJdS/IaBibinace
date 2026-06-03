@@ -84,7 +84,8 @@ TAKE_PROFIT_PCT        = float(os.getenv("TAKE_PROFIT_PCT",       "0.025"))
 TRAILING_STOP_PCT      = float(os.getenv("TRAILING_STOP_PCT",     "0.01"))
 POSITION_SIZE_PCT      = float(os.getenv("POSITION_SIZE_PCT",     "0.10"))
 MIN_TRADE_USDT         = float(os.getenv("MIN_TRADE_USDT",        "25"))
-MIN_NOTIONAL           = float(os.getenv("MIN_NOTIONAL",          "25"))
+MIN_NOTIONAL           = float(os.getenv("MIN_NOTIONAL",          "10"))
+MAX_ORDER_USDT         = float(os.getenv("MAX_ORDER_USDT",        "100.0"))  # Valor máximo por ordem em USDT
 
 # ── Thresholds de decisão ─────────────────────────────────────
 CONFIDENCE_THRESHOLD      = int(os.getenv("CONFIDENCE_THRESHOLD",      "52"))

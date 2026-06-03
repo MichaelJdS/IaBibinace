@@ -405,49 +405,84 @@ class MainWindow(QMainWindow):
         w   = QWidget()
         lay = QVBoxLayout(w)
 
+        # ── Sentimento + Risco de Evento (linha horizontal) ──
+        top_row = QHBoxLayout()
+
         # Score de sentimento por símbolo
         grp_sent = QGroupBox("Sentimento de Mercado (Finnhub)")
         sl       = QHBoxLayout(grp_sent)
-        self.sent_bars = {}
-        for sym, col in [("BTC", ORANGE), ("ETH", CYAN), ("BNB", YELLOW), ("GLOBAL", PURPLE)]:
-            vb = QVBoxLayout()
+        self.sent_bars   = {}
+        self.sent_labels = {}
+        for sym, col in [("BTC", ORANGE), ("ETH", CYAN), ("SOL", GREEN), ("BNB", YELLOW), ("GLOBAL", PURPLE)]:
+            vb  = QVBoxLayout()
             lbl = QLabel(sym)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(f"color: {col}; font-weight: bold;")
+            lbl.setStyleSheet(f"color: {col}; font-weight: bold; font-size: 12px;")
             bar = QProgressBar()
             bar.setRange(-100, 100)
             bar.setValue(0)
             bar.setOrientation(Qt.Orientation.Vertical)
-            bar.setMinimumHeight(100)
-            bar.setFixedWidth(50)
+            bar.setMinimumHeight(110)
+            bar.setFixedWidth(46)
             bar.setFormat("%v%")
             bar.setStyleSheet(f"""
-                QProgressBar::chunk {{ background: {col}; }}
-                QProgressBar {{ background: {DARK_CARD}; border: 1px solid {DARK_BORD}; }}
+                QProgressBar::chunk {{ background: {col}; border-radius: 3px; }}
+                QProgressBar {{ background: {DARK_CARD}; border: 1px solid {DARK_BORD};
+                               border-radius: 3px; }}
             """)
+            val_lbl = QLabel("0%")
+            val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            val_lbl.setStyleSheet(f"color: {col}; font-size: 10px;")
             vb.addWidget(lbl)
             vb.addWidget(bar, alignment=Qt.AlignmentFlag.AlignHCenter)
+            vb.addWidget(val_lbl)
             sl.addLayout(vb)
-            self.sent_bars[sym] = bar
-        lay.addWidget(grp_sent)
+            self.sent_bars[sym]   = bar
+            self.sent_labels[sym] = val_lbl
+        top_row.addWidget(grp_sent, 3)
 
-        # Event risk
-        grp_ev   = QGroupBox("Risco de Evento")
-        evl      = QHBoxLayout(grp_ev)
+        # Risco de Evento (lado direito)
+        right_col = QVBoxLayout()
+        grp_ev    = QGroupBox("Risco de Evento")
+        evl       = QVBoxLayout(grp_ev)
         self.lbl_event_risk = QLabel("BAIXO")
-        self.lbl_event_risk.setStyleSheet(f"color: {GREEN}; font-size: 24px; font-weight: bold;")
+        self.lbl_event_risk.setStyleSheet(
+            f"color: {GREEN}; font-size: 28px; font-weight: bold;")
         self.lbl_event_risk.setAlignment(Qt.AlignmentFlag.AlignCenter)
         evl.addWidget(self.lbl_event_risk)
-        lay.addWidget(grp_ev)
+        right_col.addWidget(grp_ev)
 
-        # Feed de notícias
+        # Botão Refresh + timestamp
+        refresh_row = QHBoxLayout()
+        self.btn_news_refresh = QPushButton("🔄  Atualizar Notícias")
+        self.btn_news_refresh.setStyleSheet(
+            f"background: #0a2040; color: {CYAN}; border: 1px solid {CYAN};"
+            f" border-radius: 5px; padding: 8px 14px; font-weight: bold;"
+        )
+        self.btn_news_refresh.clicked.connect(self._on_news_refresh)
+        self.lbl_news_ts = QLabel("Última: --:--:--")
+        self.lbl_news_ts.setStyleSheet(f"color: {TEXT_MUT}; font-size: 11px;")
+        refresh_row.addWidget(self.btn_news_refresh)
+        refresh_row.addWidget(self.lbl_news_ts)
+        right_col.addLayout(refresh_row)
+        right_col.addStretch()
+        top_row.addLayout(right_col, 2)
+
+        lay.addLayout(top_row)
+
+        # ── Feed de notícias ──────────────────────────────────
         grp_feed = QGroupBox("Feed de Notícias — Finnhub")
         fl       = QVBoxLayout(grp_feed)
-        self.news_table = QTableWidget(0, 3)
-        self.news_table.setHorizontalHeaderLabels(["Hora", "Fonte", "Título"])
+        self.news_table = QTableWidget(0, 4)
+        self.news_table.setHorizontalHeaderLabels(["Hora", "Fonte", "Título", "Sent."])
         self.news_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.news_table.setColumnWidth(0, 80)
+        self.news_table.setColumnWidth(0, 70)
         self.news_table.setColumnWidth(1, 120)
+        self.news_table.setColumnWidth(3, 60)
+        self.news_table.setAlternatingRowColors(True)
+        self.news_table.setStyleSheet(
+            f"QTableWidget {{ alternate-background-color: #14192a; }}"
+        )
         fl.addWidget(self.news_table)
         lay.addWidget(grp_feed)
 
@@ -462,7 +497,10 @@ class MainWindow(QMainWindow):
 
         def make_stat(title, val="---", col=TEXT_PRI):
             f  = QFrame()
-            f.setStyleSheet(f"background: {DARK_CARD}; border-radius: 8px; border: 1px solid {DARK_BORD};")
+            f.setStyleSheet(
+                f"background: {DARK_CARD}; border-radius: 8px;"
+                f" border: 1px solid {DARK_BORD};"
+            )
             vl = QVBoxLayout(f)
             t  = QLabel(title.upper())
             t.setStyleSheet(f"color: {TEXT_MUT}; font-size: 10px;")
@@ -495,26 +533,87 @@ class MainWindow(QMainWindow):
         self.daily_loss_bar.setRange(0, 100)
         self.daily_loss_bar.setValue(0)
         self.daily_loss_bar.setFormat("%v%")
-        self.daily_loss_bar.setStyleSheet("""
-            QProgressBar::chunk { background: #ff1744; }
-        """)
+        self.daily_loss_bar.setStyleSheet(
+            "QProgressBar::chunk { background: #ff1744; }"
+        )
         dl.addWidget(self.daily_loss_bar)
         lay.addWidget(grp_dl, 2, 0, 1, 4)
 
-        # Config de risco ao vivo
-        grp_cfg = QGroupBox("Parâmetros de Risco")
-        cl      = QGridLayout(grp_cfg)
-        params  = [
-            ("SL %",  "STOP_LOSS_PCT"),
-            ("TP %",  "TAKE_PROFIT_PCT"),
-            ("Qty",   "TRADE_QUANTITY"),
-        ]
-        for i, (lbl, attr) in enumerate(params):
-            cl.addWidget(QLabel(lbl), 0, i * 2)
-            val_lbl = QLabel(str(getattr(config, attr, "---")))
-            val_lbl.setStyleSheet(f"color: {CYAN}; font-weight: bold;")
-            cl.addWidget(val_lbl, 0, i * 2 + 1)
-        lay.addWidget(grp_cfg, 3, 0, 1, 4)
+        # ── Controles de Risco Editáveis ──────────────────────
+        grp_ctrl = QGroupBox("⚙️  Controles de Risco — Ajuste em Tempo Real")
+        grp_ctrl.setStyleSheet(
+            f"QGroupBox {{ border: 2px solid {ORANGE}; border-radius: 8px;"
+            f" margin-top: 10px; padding-top: 12px; }}"
+            f"QGroupBox::title {{ color: {ORANGE}; font-size: 12px; }}"
+        )
+        cl = QGridLayout(grp_ctrl)
+        cl.setSpacing(12)
+
+        # ── Campo: Valor máximo por ordem (USDT) ──
+        cl.addWidget(QLabel("💵  Max por Ordem (USDT):"), 0, 0)
+        self.spin_max_order = QSpinBox()
+        self.spin_max_order.setRange(10, 100000)
+        self.spin_max_order.setValue(
+            int(getattr(config, "MAX_ORDER_USDT", 100))
+        )
+        self.spin_max_order.setSuffix(" USDT")
+        self.spin_max_order.setStyleSheet(
+            f"QSpinBox {{ background: {DARK_CARD}; color: {CYAN};"
+            f" border: 1px solid {DARK_BORD}; border-radius: 4px;"
+            f" padding: 6px 10px; font-size: 14px; font-weight: bold; }}"
+        )
+        cl.addWidget(self.spin_max_order, 0, 1)
+
+        # ── Campo: Stop Loss % ──
+        cl.addWidget(QLabel("🛑  Stop Loss (%):  "), 0, 2)
+        from PyQt6.QtWidgets import QDoubleSpinBox
+        self.spin_sl = QDoubleSpinBox()
+        self.spin_sl.setRange(0.1, 20.0)
+        self.spin_sl.setDecimals(2)
+        self.spin_sl.setSingleStep(0.1)
+        self.spin_sl.setValue(round(config.STOP_LOSS_PCT * 100, 2))
+        self.spin_sl.setSuffix(" %")
+        self.spin_sl.setStyleSheet(
+            f"QDoubleSpinBox {{ background: {DARK_CARD}; color: {RED};"
+            f" border: 1px solid {DARK_BORD}; border-radius: 4px;"
+            f" padding: 6px 10px; font-size: 14px; font-weight: bold; }}"
+        )
+        cl.addWidget(self.spin_sl, 0, 3)
+
+        # ── Campo: Take Profit (Stop Win) % ──
+        cl.addWidget(QLabel("🎯  Stop Win / TP (%): "), 0, 4)
+        self.spin_tp = QDoubleSpinBox()
+        self.spin_tp.setRange(0.1, 50.0)
+        self.spin_tp.setDecimals(2)
+        self.spin_tp.setSingleStep(0.1)
+        self.spin_tp.setValue(round(config.TAKE_PROFIT_PCT * 100, 2))
+        self.spin_tp.setSuffix(" %")
+        self.spin_tp.setStyleSheet(
+            f"QDoubleSpinBox {{ background: {DARK_CARD}; color: {GREEN};"
+            f" border: 1px solid {DARK_BORD}; border-radius: 4px;"
+            f" padding: 6px 10px; font-size: 14px; font-weight: bold; }}"
+        )
+        cl.addWidget(self.spin_tp, 0, 5)
+
+        # ── Botão Aplicar ──
+        self.btn_apply_risk = QPushButton("✅  Aplicar")
+        self.btn_apply_risk.setStyleSheet(
+            f"QPushButton {{ background: #002a10; color: {GREEN};"
+            f" border: 2px solid {GREEN}; border-radius: 5px;"
+            f" padding: 8px 20px; font-size: 14px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: #003d18; }}"
+        )
+        self.btn_apply_risk.clicked.connect(self._on_apply_risk)
+        cl.addWidget(self.btn_apply_risk, 1, 0, 1, 3)
+
+        # ── Label de confirmação ──
+        self.lbl_risk_status = QLabel("")
+        self.lbl_risk_status.setStyleSheet(
+            f"color: {GREEN}; font-size: 12px; font-weight: bold;"
+        )
+        cl.addWidget(self.lbl_risk_status, 1, 3, 1, 3)
+
+        lay.addWidget(grp_ctrl, 3, 0, 1, 4)
 
         return w
 
@@ -765,31 +864,71 @@ class MainWindow(QMainWindow):
                 self.ai_log.moveCursor(self.ai_log.textCursor().MoveOperation.End)
 
     def _update_news(self):
-        ne     = self.brain.news
-        btc_s  = ne.get_sentiment("BTC")
-        eth_s  = ne.get_sentiment("ETH")
-        bnb_s  = ne.get_sentiment("BNB")
-        gl_s   = ne.get_sentiment("GLOBAL")
+        ne = self.brain.news
 
-        self.sent_bars["BTC"].setValue(int(btc_s * 100))
-        self.sent_bars["ETH"].setValue(int(eth_s * 100))
-        self.sent_bars["BNB"].setValue(int(bnb_s * 100))
-        self.sent_bars["GLOBAL"].setValue(int(gl_s * 100))
+        # ── Sentimentos ───────────────────────────────────────
+        sentiment_map = {
+            "BTC": ne.get_sentiment("BTC"),
+            "ETH": ne.get_sentiment("ETH"),
+            "SOL": ne.get_sentiment("SOL"),
+            "BNB": ne.get_sentiment("BNB"),
+            "GLOBAL": ne.get_sentiment("GLOBAL"),
+        }
+        for sym, val in sentiment_map.items():
+            if sym in self.sent_bars:
+                pct = int(val * 100)
+                self.sent_bars[sym].setValue(pct)
+                sign = "+" if pct >= 0 else ""
+                self.sent_labels[sym].setText(f"{sign}{pct}%")
 
+        # ── Risco de evento ───────────────────────────────────
         risk = ne.get_event_risk()
-        risk_map = {"low": (GREEN, "BAIXO ✅"), "medium": (YELLOW, "MÉDIO ⚠️"), "high": (RED, "ALTO 🚨")}
+        risk_map = {
+            "low"   : (GREEN,  "BAIXO ✅"),
+            "medium": (YELLOW, "MÉDIO ⚠️"),
+            "high"  : (RED,    "ALTO 🚨"),
+        }
         rc, rt = risk_map.get(risk, (TEXT_PRI, risk.upper()))
-        self.lbl_event_risk.setStyleSheet(f"color: {rc}; font-size: 24px; font-weight: bold;")
+        self.lbl_event_risk.setStyleSheet(
+            f"color: {rc}; font-size: 28px; font-weight: bold;"
+        )
         self.lbl_event_risk.setText(rt)
 
-        news = ne.get_news_feed(20)
+        # ── Timestamp última atualização ──────────────────────
+        ts_str = ne.get_last_refresh_time()
+        self.lbl_news_ts.setText(f"Última: {ts_str}")
+
+        # ── Feed de notícias ──────────────────────────────────
+        news = ne.get_news_feed(30)
         self.news_table.setRowCount(len(news))
         for i, n in enumerate(news):
             ts   = n.get("datetime", 0)
             hora = time.strftime("%H:%M", time.localtime(ts)) if ts else "---"
-            self.news_table.setItem(i, 0, QTableWidgetItem(hora))
-            self.news_table.setItem(i, 1, QTableWidgetItem(n.get("source", "")))
-            self.news_table.setItem(i, 2, QTableWidgetItem(n.get("headline", "")))
+            headline = n.get("headline", "")
+            source   = n.get("source",   "")
+
+            # Sentimento simples pelo título
+            hl_low  = headline.lower()
+            pos_hit = sum(1 for w in ["bull","rally","surge","gain","record","approval","etf"] if w in hl_low)
+            neg_hit = sum(1 for w in ["crash","ban","hack","fear","drop","collapse","fraud"] if w in hl_low)
+            if pos_hit > neg_hit:
+                sent_str, sent_col = "▲ +", GREEN
+            elif neg_hit > pos_hit:
+                sent_str, sent_col = "▼ -", RED
+            else:
+                sent_str, sent_col = "─ 0", TEXT_MUT
+
+            items = [
+                (0, hora,       None),
+                (1, source,     None),
+                (2, headline,   None),
+                (3, sent_str,   sent_col),
+            ]
+            for col_idx, text, col in items:
+                item = QTableWidgetItem(text)
+                if col:
+                    item.setForeground(QColor(col))
+                self.news_table.setItem(i, col_idx, item)
 
     def _update_risk(self):
         stats   = self.brain.risk.get_stats()
@@ -874,6 +1013,9 @@ class MainWindow(QMainWindow):
         self.bot_thread.log_signal.connect(self._log_main)
         self.bot_thread.start()
 
+        # Aplica parâmetros de risco atuais ao iniciar
+        self._on_apply_risk(silent=True)
+
     def _on_stop(self):
         if self.bot_thread:
             self.bot_thread.stop()
@@ -881,6 +1023,45 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.status_lbl.setText("● Bot parado")
         self.status_lbl.setStyleSheet(f"color: {RED}; padding: 4px 10px;")
+
+    def _on_apply_risk(self, silent: bool = False):
+        """Aplica os controles de risco do painel ao brain em runtime."""
+        if not self.brain:
+            return
+        try:
+            max_order = float(self.spin_max_order.value())
+            sl_pct    = float(self.spin_sl.value())
+            tp_pct    = float(self.spin_tp.value())
+
+            self.brain.risk.set_max_order_usdt(max_order)
+            self.brain.risk.set_stop_loss_pct(sl_pct)
+            self.brain.risk.set_take_profit_pct(tp_pct)
+
+            msg = (
+                f"✅ Aplicado: Max=${max_order:.0f} USDT | "
+                f"SL={sl_pct:.1f}% | TP={tp_pct:.1f}%"
+            )
+            if not silent:
+                self.lbl_risk_status.setText(msg)
+                self._log_main(msg)
+                # Limpa label após 4s
+                QTimer.singleShot(4000, lambda: self.lbl_risk_status.setText(""))
+        except Exception as e:
+            self.lbl_risk_status.setText(f"❌ Erro: {e}")
+
+    def _on_news_refresh(self):
+        """Força atualização das notícias via botão na aba News."""
+        if not self.brain:
+            return
+        self.btn_news_refresh.setEnabled(False)
+        self.btn_news_refresh.setText("⏳  Atualizando...")
+        self.brain.news.force_refresh()
+        # Re-habilita botão após 3s
+        QTimer.singleShot(3000, self._reset_news_btn)
+
+    def _reset_news_btn(self):
+        self.btn_news_refresh.setEnabled(True)
+        self.btn_news_refresh.setText("🔄  Atualizar Notícias")
 
     def _log_main(self, msg: str):
         self.main_log.append(

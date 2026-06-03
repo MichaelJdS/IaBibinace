@@ -29,7 +29,37 @@ class RiskEngine:
         self._in_cooldown    = False
         self._cooldown_until = 0
         self._session_start  = int(time.time())
+        # Referência ao executor para ler parâmetros de risco em runtime
+        self._executor_ref   = None
         log.info("RiskEngine iniciado")
+
+    def set_executor(self, executor):
+        """Liga o RiskEngine ao OrderExecutor para ler SL/TP/MaxOrder em runtime."""
+        self._executor_ref = executor
+
+    # ── Setters de risco chamados pela GUI ────────────────────
+
+    def set_stop_loss_pct(self, value: float):
+        """Define SL% no config e no executor em runtime. value ex: 1.5 → 0.015"""
+        pct = max(0.001, value / 100.0)
+        config.STOP_LOSS_PCT = pct
+        if self._executor_ref:
+            self._executor_ref.set_sl_pct(pct)
+        log.info(f"RiskEngine: Stop Loss → {value:.1f}%")
+
+    def set_take_profit_pct(self, value: float):
+        """Define TP% no config e no executor em runtime. value ex: 2.5 → 0.025"""
+        pct = max(0.001, value / 100.0)
+        config.TAKE_PROFIT_PCT = pct
+        if self._executor_ref:
+            self._executor_ref.set_tp_pct(pct)
+        log.info(f"RiskEngine: Take Profit → {value:.1f}%")
+
+    def set_max_order_usdt(self, value: float):
+        """Define valor máximo por ordem em USDT no executor em runtime."""
+        if self._executor_ref:
+            self._executor_ref.set_max_order_usdt(value)
+        log.info(f"RiskEngine: Max Ordem → ${value:.2f}")
 
     # ── Verificações de entrada ───────────────────────────────
 
@@ -126,8 +156,12 @@ class RiskEngine:
 
     # ── SL/TP dinâmico ───────────────────────────────────────
 
-    def compute_sl_tp(self, entry_price: float, atr: float = None) -> tuple:
-        if self.adaptive:
+    def compute_sl_tp(self, entry_price: float, atr: float = None, side: str = "BUY") -> tuple:
+        # Prioridade: executor runtime > adaptive > config
+        if self._executor_ref:
+            sl_pct = self._executor_ref._sl_pct
+            tp_pct = self._executor_ref._tp_pct
+        elif self.adaptive:
             sl_pct = self.adaptive.get_param("stop_loss_pct",   config.STOP_LOSS_PCT)
             tp_pct = self.adaptive.get_param("take_profit_pct", config.TAKE_PROFIT_PCT)
         else:
@@ -135,31 +169,31 @@ class RiskEngine:
             tp_pct = config.TAKE_PROFIT_PCT
 
         if atr and atr > 0:
-            sl = entry_price - (atr * 2.0)
-            tp = entry_price + (atr * 3.0)
+            sl = entry_price - (atr * config.SL_ATR_MULT)
+            tp = entry_price + (atr * config.TP_ATR_MULT)
         else:
             sl = entry_price * (1 - sl_pct)
             tp = entry_price * (1 + tp_pct)
 
-        return round(sl, 2), round(tp, 2)
+        return round(sl, 8), round(tp, 8)
 
     def compute_position_size(self, balance: float, price: float,
                                atr: float = None) -> float:
-        base_qty = config.TRADE_QUANTITY
-        size_pct = self.adaptive.get_param("position_size_pct", 0.8) \
-                   if self.adaptive else 0.8
+        """Calcula quantidade respeitando o limite de USDT por ordem do executor."""
+        if price <= 0:
+            return 0.0
 
-        max_risk_usd = balance * 0.02
-        sl_pct       = self.adaptive.get_param("stop_loss_pct", config.STOP_LOSS_PCT) \
-                       if self.adaptive else config.STOP_LOSS_PCT
-        risk_per_unit = price * sl_pct
-        if risk_per_unit > 0:
-            max_qty_by_risk = max_risk_usd / risk_per_unit
-            qty = min(base_qty * size_pct, max_qty_by_risk)
+        # Limite em USDT — lê do executor se disponível
+        if self._executor_ref:
+            max_usdt = self._executor_ref._max_order_usdt
         else:
-            qty = base_qty * size_pct
+            max_usdt = getattr(config, "MAX_ORDER_USDT", 100.0)
 
-        return round(max(qty, 0.0001), 6)
+        # Garante que não ultrapassa % do saldo
+        max_usdt = min(max_usdt, balance * getattr(config, "POSITION_SIZE_PCT", 0.10))
+
+        qty = round(max_usdt / price, 6)
+        return max(qty, 0.000001)
 
     def check_trailing_stop(self, position: dict, current_price: float) -> bool:
         """FIX: usa lock para evitar condição de corrida em multi-par."""
