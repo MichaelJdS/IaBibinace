@@ -103,6 +103,12 @@ class MarketDataHub:
 
     def start(self):
         self.binance_ws.start()
+        if YFINANCE_AVAILABLE:
+            for pair in config.FOREX_PAIRS:
+                try:
+                    self.forex_feed._update(pair)
+                except Exception as e:
+                    log.warning(f"ForexFeed init {pair}: {e}")
         self.forex_feed.start()
         log.info("MarketDataHub iniciado")
 

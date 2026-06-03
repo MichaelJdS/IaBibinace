@@ -95,8 +95,6 @@ class OrderExecutor:
     # ── Saldo ─────────────────────────────────────────────────
 
     def get_balance(self, asset: str = "USDT") -> float:
-        if self.mode == "demo":
-            return self._demo_balance.get(asset, 0.0)
         try:
             ts     = int(time.time() * 1000)
             params = {"timestamp": ts}
@@ -114,8 +112,6 @@ class OrderExecutor:
         return 0.0
 
     def get_all_balances(self) -> dict:
-        if self.mode == "demo":
-            return self._demo_balance.copy()
         try:
             ts     = int(time.time() * 1000)
             params = {"timestamp": ts}
@@ -151,34 +147,6 @@ class OrderExecutor:
                 log.warning(f"Já existe posição aberta para {symbol}. Ignorando BUY.")
                 return False
 
-        if self.mode == "demo":
-            cost = quantity * price
-            if self._demo_balance.get(quote_asset, 0.0) < cost:
-                log.warning(
-                    f"Saldo insuficiente: "
-                    f"${self._demo_balance.get(quote_asset, 0.0):.2f} < ${cost:.2f}"
-                )
-                return False
-            self._demo_balance[quote_asset]  = self._demo_balance.get(quote_asset, 0.0) - cost
-            self._demo_balance[base_asset]   = self._demo_balance.get(base_asset,  0.0) + quantity
-            with self._lock:
-                self._open_positions[symbol] = {
-                    "symbol"       : symbol,
-                    "side"         : "BUY",
-                    "quantity"     : quantity,
-                    "entry_price"  : price,
-                    "stop_loss"    : round(sl, 6),
-                    "take_profit"  : round(tp, 6),
-                    "entry_time"   : time.time(),
-                    "highest_price": price,
-                }
-            log.info(
-                f"✅ BUY DEMO | {quantity:.6f} {symbol} @ ${price:,.2f} | "
-                f"SL: ${sl:,.2f} | TP: ${tp:,.2f}"
-            )
-            return True
-
-        # ── Live / Testnet ────────────────────────────────────
         try:
             ts     = int(time.time() * 1000)
             params = {
@@ -208,7 +176,7 @@ class OrderExecutor:
                     "highest_price": fill_price,
                     "order_id"     : order.get("orderId")
                 }
-            log.info(f"✅ BUY LIVE | {quantity:.6f} {symbol} @ ${fill_price:,.2f}")
+            log.info(f"✅ BUY | {quantity:.6f} {symbol} @ ${fill_price:,.2f}")
             return True
         except Exception as e:
             log.error(f"Erro ao executar BUY: {e}")
@@ -236,53 +204,6 @@ class OrderExecutor:
         base_asset  = symbol[:-4] if symbol.endswith("USDT") else symbol[:-4]
         quote_asset = "USDT"     if symbol.endswith("USDT") else symbol[-4:]
 
-        if self.mode == "demo":
-            # FIX: tenta usar preço real do WebSocket
-            real_price  = self._get_current_price(symbol)
-            if real_price > 0:
-                exit_price = real_price
-            else:
-                # fallback para TP/SL se WS não disponível
-                exit_price = pos["take_profit"] if reason == "tp" else \
-                             pos["stop_loss"]    if reason == "sl" else \
-                             entry * 1.005
-
-            revenue = quantity * exit_price
-            self._demo_balance[quote_asset] = \
-                self._demo_balance.get(quote_asset, 0.0) + revenue
-            self._demo_balance[base_asset]  = \
-                max(0.0, self._demo_balance.get(base_asset, 0.0) - quantity)
-
-            pnl_usd  = (exit_price - entry) * quantity
-            pnl_pct  = (exit_price - entry) / entry * 100
-            is_win   = pnl_usd > 0
-            duration = round(time.time() - entry_time, 0)
-
-            record = {
-                "symbol"  : symbol,
-                "side"    : "BUY",
-                "entry"   : entry,
-                "exit"    : exit_price,
-                "qty"     : quantity,
-                "pnl_usd" : round(pnl_usd, 4),
-                "pnl_pct" : round(pnl_pct,  2),
-                "reason"  : reason,
-                "duration": duration
-            }
-            self._trade_history.append(record)
-
-            with self._lock:
-                del self._open_positions[symbol]
-
-            result = "✅ WIN" if is_win else "❌ LOSS"
-            log.info(
-                f"{result} SELL DEMO | {quantity:.6f} {symbol} @ ${exit_price:,.2f} | "
-                f"PnL: ${pnl_usd:+.4f} ({pnl_pct:+.2f}%) | Razão: {reason} | "
-                f"Duração: {int(duration)}s"
-            )
-            return True, pnl_pct / 100, pnl_usd, is_win
-
-        # ── Live / Testnet ────────────────────────────────────
         try:
             ts     = int(time.time() * 1000)
             params = {

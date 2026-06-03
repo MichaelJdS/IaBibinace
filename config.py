@@ -140,13 +140,13 @@ SLIPPAGE_FOREX   = float(os.getenv("SLIPPAGE_FOREX",   "0.0001"))
 
 BINANCE_ENDPOINTS = {
     "DEMO": {
-        "rest":      "https://api.demo-trading.binance.com",
-        "ws":        "wss://ws-api.demo-trading.binance.com:443/ws-api/v3",
-        "ws_stream": "wss://data-stream.demo-trading.binance.com",
+        "rest":      "https://demo-api.binance.com",
+        "ws":        "wss://demo-ws-api.binance.com/ws-api/v3",
+        "ws_stream": "wss://demo-stream.binance.com",
     },
     "REAL": {
         "rest":      "https://api.binance.com",
-        "ws":        "wss://stream.binance.com:9443/ws",
-        "ws_stream": "wss://stream.binance.com:9443/stream",
-    },
+        "ws":        "wss://ws-api.binance.com/ws-api/v3",
+        "ws_stream": "wss://stream.binance.com:9443",
+    }
 }

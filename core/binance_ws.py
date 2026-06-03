@@ -142,6 +142,9 @@ class BinanceWebSocketManager:
     # ── Candles históricos (REST) ─────────────────────────────
 
     def _load_historical(self, pair: str):
+        if config.MARKET_TYPE_MAP.get(pair) == "forex":
+            return  # Forex vem do ForexFeed (yfinance), não da Binance
+
         for tf in [config.TF_PRIMARY, config.TF_FAST, config.TF_SLOW]:
             try:
                 endpoint = config.BINANCE_ENDPOINTS[config.TRADING_MODE]
@@ -181,6 +184,9 @@ class BinanceWebSocketManager:
             t.start()
 
     def _connect_pair(self, pair: str):
+        if config.MARKET_TYPE_MAP.get(pair) == "forex":
+            return  # Forex não tem stream na Binance
+
         sym = pair.lower()
         tfs = [config.TF_PRIMARY, config.TF_FAST, config.TF_SLOW]
 
@@ -189,8 +195,8 @@ class BinanceWebSocketManager:
         streams += [f"{sym}@bookTicker"]
 
         endpoint  = config.BINANCE_ENDPOINTS[config.TRADING_MODE]
-        ws_base   = endpoint.get("ws_stream", "wss://stream.binance.com:9443/ws")
-        stream_url= f"{ws_base}/{'/'.join(streams)}"
+        ws_base   = endpoint.get("ws_stream", "wss://demo-stream.binance.com")
+        stream_url= f"{ws_base}/stream?streams={'/'.join(streams)}"
 
         while self._running:
             try:
